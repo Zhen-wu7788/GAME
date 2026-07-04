@@ -136,10 +136,6 @@
     font-family:'JetBrains Mono',monospace;letter-spacing:.3px;}
   .conn-ok{background:rgba(91,224,138,.1);border:1px solid rgba(91,224,138,.35);color:var(--green);}
   .conn-bad{background:rgba(255,59,59,.1);border:1px solid rgba(255,59,59,.4);color:var(--danger);}
-
-  /* Added: hide class for boot screen to allow smooth fade-out */
-  #boot.hide{opacity:0;pointer-events:none;transition:opacity .35s ease;}
-  @media (prefers-reduced-motion: reduce){#boot.hide{transition:none;}}
 </style>
 </head>
 <body>
@@ -154,24 +150,19 @@
 <div id="app"></div>
 
 <script>
-/* ============ 手機輸入優化版本 v2.5 ============ */
-/* 核心改善：
-   1. Smart DOM Updates - 智能 DOM 更新，保留輸入框不重建
-   2. 增強 IME 保護 - 更好的中文輸入組字支援
-   3. 減少重繪頻率 - 智能節流
-*/
-
-/* ---------- 配置 & 主題資料 ---------- */
+/* ---------------- Config / theme data ---------------- */
 const ROLE_ORDER = ['A','B','C','D'];
 const ROLE_TITLE = { A:'紅組 · 電力工程師', B:'藍組 · 領航員', C:'綠組 · 生化研究員', D:'黃組 · 保全主管' };
 const ROLE_COLOR = { A:'var(--red)', B:'var(--cyan)', C:'var(--green)', D:'var(--amber)' };
-
+// 第三關成語庫（4字） — 可隨機抽取
 const STAGE3_BANK = [
   '逃出生天','同舟共濟','並肩作戰','萬眾一心','齊心協力','眾志成城','絕處逢生','風雨同舟','生死與共','同心協力'
 ];
 
+// 迷宮與出口設定（6x6）
 const EXIT_POS = {r:5,c:5};
 
+// 產生可解的隨機迷宮（'0' 可通行，'1' 為牆）
 function generateMaze(){
   function hasValidPath(grid){
     const R = 6, C = 6;
@@ -198,13 +189,16 @@ function generateMaze(){
     for(let r=0;r<6;r++){
       let row = '';
       for(let c=0;c<6;c++){
+        // 牆機率 30%
         row += (Math.random() < 0.30) ? '1' : '0';
       }
       grid.push(row);
     }
+    // 確保起點與出口為通路
     grid[0] = '0' + grid[0].slice(1);
     grid[EXIT_POS.r] = grid[EXIT_POS.r].slice(0, EXIT_POS.c) + '0' + grid[EXIT_POS.r].slice(EXIT_POS.c+1);
     if(hasValidPath(grid)) return grid;
+    // 若不可解，重試（理論上數次內會成功）
   }
 }
 
@@ -247,7 +241,6 @@ function buildStage1Jobs(colors, numbers){
   });
   return jobs;
 }
-
 const RAINBOW_COLORS = ['紅','橘','黃','綠','藍','靛','紫'];
 const HINTS = {
   1:'提示：本關由三種隨機彩虹色組成，三位顏色各有一個數字，請協力推理出正確的 3 位數答案。',
@@ -264,9 +257,10 @@ const AMBIENT = [
   '警告：主電腦溫度上升'
 ];
 
-/* ---------- Firebase REST API ---------- */
+/* ---------------- Firebase REST API Config ---------------- */
 const REST_DB_URL = "https://game-212a4-default-rtdb.firebaseio.com";
 
+/* ---------------- Storage helpers (Firebase REST API via fetch) ---------------- */
 async function metaGet(code){
   try{ 
     const res = await fetch(`${REST_DB_URL}/rooms/${code}/meta.json`);
@@ -322,7 +316,7 @@ async function lbAdd(entry){
   } catch(e){ console.error('lbAdd fail', e); }
 }
 
-/* ---------- App 全局狀態 ---------- */
+/* ---------------- App state ---------------- */
 const S = {
   me: { id: 'p_'+Math.random().toString(36).slice(2,10), name:'' },
   code: null,
@@ -332,11 +326,11 @@ const S = {
   errorMsg: '',
   tick: 0,
   lastSaveOk: true,
-  storageOk: null,
-  isComposing: false,
-  lastRenderTime: 0,
-  renderPending: false
+  storageOk: null 
 };
+
+// IME 組字保護：在使用者輸入中文（composition）時，避免自動重繪打斷輸入
+S.isComposing = false;
 
 function setupIMEListeners(){
   const ids = ['nameInput','codeInput','chatInput','safeInput','wordInput'];
@@ -345,18 +339,8 @@ function setupIMEListeners(){
     if(!el) return;
     if(el._imeAttached) return;
     el._imeAttached = true;
-    el.addEventListener('compositionstart', ()=>{ 
-      S.isComposing = true; 
-    });
-    el.addEventListener('compositionend', ()=>{ 
-      S.isComposing = false; 
-      // 組字結束後延遲重繪，避免中文輸入卡頓
-      setTimeout(()=>{ try{ render(); }catch(e){} }, 10); 
-    });
-    el.addEventListener('input', ()=>{
-      // input 事件時也觸發節流重繪
-      scheduleRender();
-    });
+    el.addEventListener('compositionstart', ()=>{ S.isComposing = true; });
+    el.addEventListener('compositionend', ()=>{ S.isComposing = false; setTimeout(()=>{ try{ render(); }catch(e){} }, 0); });
   });
 }
 
@@ -367,21 +351,23 @@ function isTypingInput(){
 }
 
 function attachUiHandlers(){
+  // 退出 / 返回大廳：先替換成 clone 清除舊 listeners，再重新綁定（避免重複綁定或舊 listeners 無效）
   document.querySelectorAll('.btn-reset-lobby').forEach(node=>{
     const n = node.cloneNode(true);
     node.parentNode && node.parentNode.replaceChild(n, node);
   });
   document.querySelectorAll('.btn-reset-lobby').forEach(el=>{
-    el.addEventListener('click', (ev)=>{ ev.preventDefault(); ev.stopPropagation(); actLeaveRoom(); });
+    el.addEventListener('click', (ev)=>{ ev.preventDefault(); ev.stopPropagation(); console.log('btn-reset-lobby clicked', ev.currentTarget); actLeaveRoom(); });
   });
 
+  // topbar / leaderboard 按鈕
   document.querySelectorAll('.top-back').forEach(node=>{ const n = node.cloneNode(true); node.parentNode && node.parentNode.replaceChild(n, node); });
-  document.querySelectorAll('.top-back').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); actBackFromLeaderboard(); }));
+  document.querySelectorAll('.top-back').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); console.log('top-back clicked'); actBackFromLeaderboard(); }));
   document.querySelectorAll('.top-leader').forEach(node=>{ const n = node.cloneNode(true); node.parentNode && node.parentNode.replaceChild(n, node); });
-  document.querySelectorAll('.top-leader').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); actGoLeaderboard(); }));
+  document.querySelectorAll('.top-leader').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); console.log('top-leader clicked'); actGoLeaderboard(); }));
 
   document.querySelectorAll('.btn-leader-back').forEach(node=>{ const n = node.cloneNode(true); node.parentNode && node.parentNode.replaceChild(n, node); });
-  document.querySelectorAll('.btn-leader-back').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); actBackFromLeaderboard(); }));
+  document.querySelectorAll('.btn-leader-back').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); console.log('btn-leader-back clicked'); actBackFromLeaderboard(); }));
 }
 
 async function checkStorage(){
@@ -414,7 +400,7 @@ function fmtTime(ms){
   return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }
 
-/* ---------- Action 函數 ---------- */
+/* ---------------- Actions ---------------- */
 async function actCreateRoom(){
   if(S.storageOk===false){ S.errorMsg='資料庫連線異常，請稍後再試'; render(); return; }
   const nameInput = document.getElementById('nameInput');
@@ -432,23 +418,682 @@ async function actCreateRoom(){
   render();
 }
 
-/* (rest of the file unchanged) */
-
-// Place a small async initializer to hide the boot screen after initialization
-async function appInit(){
-  try{ await checkStorage(); }catch(e){ /* ignore */ }
-  try{ render(); }catch(e){ /* ignore */ }
-  const boot = document.getElementById('boot');
-  if(boot){
-    // fade out then remove to ensure it doesn't block interaction
-    boot.classList.add('hide');
-    setTimeout(()=>{ try{ boot.remove(); }catch(e){} }, 400);
+async function actJoinRoom(){
+  if(S.storageOk===false){ S.errorMsg='資料庫連線異常，請稍後再試'; render(); return; }
+  const nameInput = document.getElementById('nameInput');
+  const codeInput = document.getElementById('codeInput');
+  const name = (nameInput ? nameInput.value.trim() : '') || '無名船員';
+  const code = (codeInput ? codeInput.value.trim().toUpperCase() : '');
+  if(!code){ S.errorMsg='請輸入房間代碼'; render(); return; }
+  S.me.name = name;
+  let meta = await metaGet(code);
+  if(!meta){ S.errorMsg='找不到這個房間代碼，請確認後再試一次'; render(); return; }
+  if(!meta.players.find(p=>p.id===S.me.id)){
+    if(meta.status!=='waiting'){ S.errorMsg='這個房間已經開始遊戲了'; render(); return; }
+    if(meta.players.length>=4){ S.errorMsg='這個房間已經滿了（4/4）'; render(); return; }
+    meta.players.push({id:S.me.id,name:S.me.name});
+    await metaSet(code, meta);
   }
-  try{ setupIMEListeners(); }catch(e){}
+  S.code = code; S.meta = meta; S.errorMsg='';
+  S.screen = meta.status==='waiting' ? 'wait' : 'play';
+  startPolling();
+  render();
 }
 
-window.addEventListener('load', ()=>{ setTimeout(()=>{ appInit(); }, 50); });
+async function actStartGame(){
+  if(!isHost() || S.meta.players.length!==4) return;
+  const meta = S.meta;
+  meta.roles = {};
+  meta.players.forEach((p,i)=>{ meta.roles[p.id] = ROLE_ORDER[i]; });
 
+  const colors = shuffleArray(RAINBOW_COLORS).slice(0,3);
+  const numbers = {};
+  colors.forEach(color => { numbers[color] = Math.floor(Math.random()*10); });
+  meta.stage1 = {
+    colors,
+    digits: numbers,
+    jobs: buildStage1Jobs(colors, numbers),
+    answer: colors.map(c => String(numbers[c])).join(''),
+    solved:false
+  };
+  meta.stage2 = { windowStart:null, solved:false };
+  const chosenWord = STAGE3_BANK[Math.floor(Math.random()*STAGE3_BANK.length)];
+  const wchars = chosenWord.split('').slice(0,4);
+  meta.stage3 = { chars:{A:wchars[0],B:wchars[1],C:wchars[2],D:wchars[3]}, answer: wchars.join(''), solved:false };
+
+  const mazeA = generateMaze();
+  const mazeB = generateMaze();
+  meta.stage4 = {
+    pairs: {
+      AB: { grid: mazeA, pos:{r:0,c:0}, exit:EXIT_POS, moves:0, solved:false, guide:'A', controller:'B' },
+      CD: { grid: mazeB, pos:{r:0,c:0}, exit:EXIT_POS, moves:0, solved:false, guide:'C', controller:'D' }
+    },
+    solved:false
+  };
+
+  meta.stage = 1;
+  meta.stageEnteredAt = Date.now();
+  meta.gameStart = Date.now();
+  meta.status = 'playing';
+  await metaSet(S.code, meta);
+  await switchClearAll(S.code);
+  S.meta = meta; S.screen='play';
+  render();
+}
+
+async function actSendChat(){
+  const input = document.getElementById('chatInput');
+  if(!input) return;
+  const text = input.value.trim();
+  if(!text) return;
+  input.value='';
+  const meta = await metaGet(S.code) || S.meta;
+  meta.chat = meta.chat || [];
+  meta.chat.push({ name:S.me.name, role:myRole(), text, ts:Date.now() });
+  if(meta.chat.length>200) meta.chat = meta.chat.slice(-200);
+  await metaSet(S.code, meta);
+  S.meta = meta;
+  render();
+}
+
+async function actSubmitStage1(){
+  const input = document.getElementById('safeInput');
+  const val = (input?input.value.trim():'');
+  const meta = await metaGet(S.code) || S.meta;
+  const box = document.getElementById('stage1Msg');
+  const role = myRole();
+  const job = meta.stage1 && meta.stage1.jobs ? meta.stage1.jobs[role] : null;
+  if(!job || job.type !== 4){
+    if(box) box.innerHTML = '<div class="msg-fail">錯誤：你目前不是提交答案的角色，請等待負責的隊友完成任務。</div>';
+    return;
+  }
+  if(val.length !== 3){
+    if(box) box.innerHTML = '<div class="msg-fail">請輸入 3 位數答案。</div>';
+    return;
+  }
+  if(val === meta.stage1.answer){
+    meta.stage1.solved = true;
+    meta.stage = 2; meta.stageEnteredAt = Date.now();
+    await metaSet(S.code, meta);
+    S.meta = meta;
+    render();
+  } else {
+    if(box) box.innerHTML = '<div class="msg-fail">錯誤：答案錯誤，請再確認一次隊友提供的數字。</div>';
+  }
+}
+
+async function actStartSyncTest(){
+  const meta = await metaGet(S.code) || S.meta;
+  meta.stage2.windowStart = Date.now();
+  await metaSet(S.code, meta);
+  await switchClearAll(S.code);
+  S.meta = meta;
+  render();
+}
+
+async function actPressSwitch(){
+  const role = myRole();
+  if(!role) return;
+  await switchSet(S.code, role, { ts: Date.now() });
+  render();
+}
+
+async function actSubmitStage3(){
+  const input = document.getElementById('wordInput');
+  const val = (input?input.value.trim():'');
+  const meta = await metaGet(S.code) || S.meta;
+  const box = document.getElementById('stage3Msg');
+  if(val === meta.stage3.answer){
+    meta.stage3.solved = true;
+    meta.stage = 4; meta.stageEnteredAt = Date.now();
+    await metaSet(S.code, meta);
+    S.meta = meta;
+    render();
+  } else {
+    if(box) box.innerHTML = '<div class="msg-fail">錯誤：順序或字詞不對，跟隊友再確認一次</div>';
+  }
+}
+
+async function actMove(dir){
+  const role = myRole();
+  if(role !== 'B' && role !== 'D') return;
+  const meta = await metaGet(S.code) || S.meta;
+  const pairKey = role === 'B' ? 'AB' : 'CD';
+  const st = meta.stage4.pairs[pairKey];
+  if(st.solved) return;
+  let {r,c} = st.pos;
+  let nr=r, nc=c;
+  if(dir==='up') nr=r-1; if(dir==='down') nr=r+1; if(dir==='left') nc=c-1; if(dir==='right') nc=c+1;
+  if(nr<0||nr>5||nc<0||nc>5) return;
+  const rowStr = st.grid[nr];
+  if(rowStr[nc]==='1') return;
+  st.pos = {r:nr,c:nc};
+  st.moves = (st.moves||0)+1;
+  if(nr===st.exit.r && nc===st.exit.c){
+    st.solved = true;
+  }
+  const bothSolved = meta.stage4.pairs.AB.solved && meta.stage4.pairs.CD.solved;
+  if(bothSolved){
+    meta.status = 'finished';
+    meta.gameEnd = Date.now();
+    await lbAdd({ code:S.code, players: meta.players.map(p=>p.name), time:meta.gameEnd-meta.gameStart, date: Date.now() });
+  }
+  await metaSet(S.code, meta);
+  S.meta = meta;
+  render();
+}
+
+async function actResetToLobby(){
+  stopPolling();
+  S.code = null; S.meta = null; S.screen='login'; S.errorMsg='';
+  render();
+}
+
+// 正式離開房間：從伺服器上移除自己的玩家記錄，並離開
+async function actLeaveRoom(){
+  console.log('actLeaveRoom called', { code: S.code, me: S.me });
+  if(!S.code){ actResetToLobby(); return; }
+  // UI 回饋
+  S.errorMsg = '正在離開房間，請稍候…'; render();
+  try{
+    const meta = await metaGet(S.code) || S.meta;
+    console.log('leaveRoom: fetched meta', meta);
+    if(meta && meta.players){
+      meta.players = meta.players.filter(p => p.id !== S.me.id);
+      // update to server
+      const ok = await metaSet(S.code, meta);
+      console.log('leaveRoom: metaSet ok=', ok);
+    }
+  }catch(e){ console.error('leaveRoom fail', e); S.errorMsg = '離開房間失敗 (網路或伺服器錯誤)'; render(); return; }
+  stopPolling(); S.code = null; S.meta = null; S.screen='login'; S.errorMsg=''; render();
+}
+
+function actGoLeaderboard(){ S.screen='leaderboard'; render(); }
+function actBackFromLeaderboard(){ S.screen = S.code ? (S.meta && S.meta.status==='waiting' ? 'wait' : (S.meta?'play':'login')) : 'login'; render(); }
+
+/* ---------------- Real-time Pollers ---------------- */
+let pollIntervalHandle = null;
+let stage2WatchHandle = null;
+
+function startPolling(){
+  stopPolling();
+  if(!S.code) return;
+
+  pollIntervalHandle = setInterval(async () => {
+    if (!S.code) return;
+    
+    const meta = await metaGet(S.code);
+    if(meta){
+      S.meta = meta;
+      if(meta.status==='waiting') S.screen='wait';
+      else if(meta.status==='playing' || meta.status==='finished') S.screen = S.screen==='leaderboard' ? 'leaderboard' : 'play';
+    }
+    
+    try {
+      const res = await fetch(`${REST_DB_URL}/rooms/${S.code}/switches.json`);
+      const val = await res.json();
+      S.switches = val || {A:null,B:null,C:null,D:null};
+    } catch(e) { console.error('fetch switches failed', e); }
+
+    if(!S.isComposing && !isTypingInput()) render();
+  }, 1000);
+
+  stage2WatchHandle = setInterval(()=>{
+    if(S.meta && S.meta.stage===2 && S.meta.status==='playing' && isHost()) evalStage2();
+  }, 300);
+}
+
+function stopPolling(){
+  if(pollIntervalHandle){ clearInterval(pollIntervalHandle); pollIntervalHandle=null; }
+  if(stage2WatchHandle){ clearInterval(stage2WatchHandle); stage2WatchHandle=null; }
+}
+
+async function evalStage2(){
+  const meta = S.meta;
+  if(!meta || !meta.stage2 || !meta.stage2.windowStart || meta.stage2.solved) return;
+  const start = meta.stage2.windowStart;
+  const elapsed = Date.now() - start;
+  const allIn = ROLE_ORDER.every(r => S.switches[r] && S.switches[r].ts >= start && S.switches[r].ts <= start+5000);
+  if(allIn){
+    meta.stage2.solved = true;
+    meta.stage2.windowStart = null;
+    meta.stage = 3; meta.stageEnteredAt = Date.now();
+    await metaSet(S.code, meta);
+  } else if(elapsed > 5000){
+    meta.stage2.windowStart = null;
+    await metaSet(S.code, meta);
+    await switchClearAll(S.code);
+  }
+}
+
+/* ---------------- Render ---------------- */
+function esc(s){ 
+  if(!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function render(){
+  // 若正在 IME 組字中，略過整個重繪以避免打字被中斷
+  if(S.isComposing) return;
+  // 若使用者正在輸入，暫停整個重繪，避免手機鍵盤被打斷
+  if(isTypingInput()) return;
+  S.tick++;
+  const app = document.getElementById('app');
+  if(!app) return;
+
+  // 【核心修復機制】在砍掉 DOM 重新畫畫之前，先偷偷記住所有輸入框的文字與游標狀態！
+  const savedInputs = {};
+  const activeId = document.activeElement ? document.activeElement.id : null;
+  let selectionStart = 0;
+  let selectionEnd = 0;
+  
+  if (activeId && ['nameInput', 'codeInput', 'chatInput', 'safeInput', 'wordInput'].includes(activeId)) {
+    const actEl = document.getElementById(activeId);
+    if (actEl) {
+      selectionStart = actEl.selectionStart;
+      selectionEnd = actEl.selectionEnd;
+    }
+  }
+
+  ['nameInput', 'codeInput', 'chatInput', 'safeInput', 'wordInput'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el) savedInputs[id] = el.value;
+  });
+
+  let connHTML = '';
+  if(S.storageOk === false){
+    connHTML = `<div class="conn-banner conn-bad">連線警示：無法連接到主資料庫，請確認 Firebase 規則已開啟。</div>`;
+  } else if(S.storageOk === true && S.code){
+    connHTML = `<div class="conn-banner conn-ok">核心資料庫已同步 // REST 連線狀態正常</div>`;
+  }
+
+  let html = connHTML;
+  html += `
+    <div class="topbar">
+      <div class="brand">KRONOS-7 <span>// 逃生協定 v2.4</span></div>
+      <div>
+        <button class="btn-ghost topbar-btn ${S.screen==='leaderboard'?'top-back':'top-leader'}" style="padding:5px 10px; font-size:12px;" onclick="${S.screen==='leaderboard'?'actBackFromLeaderboard()':'actGoLeaderboard()'}">
+          ${S.screen==='leaderboard'?'返回協定':'歷史紀錄'}
+        </button>
+      </div>
+    </div>
+  `;
+
+  if(S.screen === 'leaderboard'){
+    html += `
+      <div class="card">
+        <h2>核心主機紀錄板</h2>
+        <div class="sub">記錄成功重啟逃生艙的最速前20組極限船員。</div>
+        <div id="lbBox" style="margin:20px 0;">讀取中...</div>
+        <button class="btn-amber btn-leader-back" onclick="actBackFromLeaderboard()">返回</button>
+      </div>
+    `;
+    app.innerHTML = html;
+    setupIMEListeners();
+    attachUiHandlers();
+    loadLeaderboardDelayed();
+    return;
+  }
+
+  if(S.screen === 'login'){
+    html += `
+      <div class="card">
+        <h2>身分授權 // 進入太空艙介面</h2>
+        <div class="sub">本系統為多人在線密室聯機遊戲。需要 4 名船員分工合作才能順利逃生。</div>
+        <div class="msg-fail" id="loginErr">${esc(S.errorMsg)}</div>
+        <div style="margin-bottom:16px;">
+          <label>輸入你的船員呼號 (代稱)</label>
+          <input type="text" id="nameInput" placeholder="例如: 艾力克斯">
+        </div>
+        <div class="row" style="margin-top:24px;">
+          <div>
+            <button class="btn-amber" style="width:100%; padding:14px;" onclick="actCreateRoom()">創建新逃生協定 (建立新房間)</button>
+          </div>
+          <div>
+            <div style="display:flex; gap:6px;">
+              <input type="text" id="codeInput" placeholder="四位代碼" style="text-transform:uppercase; max-width:120px; text-align:center;">
+              <button class="btn-ghost" style="flex:1;" onclick="actJoinRoom()">加入已有密鑰</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    app.innerHTML = html;
+    setupIMEListeners();
+  }
+  else if(S.screen === 'wait'){
+    const players = S.meta ? S.meta.players : [];
+    let listHTML = '';
+    for(let i=0; i<4; i++){
+      if(players[i]){
+        listHTML += `<div class="player-row"><div>Slot ${i+1}: <strong>${esc(players[i].name)}</strong> ${players[i].id===S.me.id?'(你)':''}</div> <span class="role-badge role-${ROLE_ORDER[i]}">${ROLE_TITLE[ROLE_ORDER[i]]}</span></div>`;
+      } else {
+        listHTML += `<div class="player-row slot-empty">Slot ${i+1}: 等待船員連線加入中...</div>`;
+      }
+    }
+    
+    html += `
+      <div class="card">
+        <h2>協定密鑰：<span class="mono" style="color:var(--amber); font-size:26px;">${esc(S.code)}</span></h2>
+        <div class="sub">將此 4 位代碼分享給其餘 3 位夥伴。所有人就位（滿 4 人）後，即可開啟大閘。</div>
+        <div class="players-list">${listHTML}</div>
+        <div style="margin-top:20px; display:flex; gap:10px;">
+          ${isHost() ? `<button class="btn-amber" ${players.length===4?'':'disabled'} onclick="actStartGame()">解鎖主控台 (滿4人可按)</button>` : `<div class="status-chip">等待隊長開始遊戲...</div>`}
+          <button class="btn-ghost btn-reset-lobby" onclick="actLeaveRoom()">退出房間</button>
+        </div>
+      </div>
+    `;
+    app.innerHTML = html;
+  }
+  else if(S.screen === 'play'){
+    const meta = S.meta;
+    const role = myRole();
+    const isFinished = meta.status === 'finished';
+    
+    let timeStr = '00:00';
+    if(meta.gameStart){
+      const end = meta.gameEnd || Date.now();
+      timeStr = fmtTime(end - meta.gameStart);
+    }
+
+    let trackHTML = '';
+    for(let i=1; i<=4; i++){
+      let cl = 'stage-dot';
+      if(meta.stage === i) cl += ' active';
+      else if(meta.stage > i || isFinished) cl += ' done';
+      trackHTML += `<div class="${cl}"></div>`;
+    }
+
+    html += `
+      <div class="grid2">
+        <div>
+          <div class="stage-track">${trackHTML}</div>
+          <div class="ai-panel">
+            <div class="ai-title">KRONOS-7 MAINFRAME ALERT</div>
+            <div class="ai-line">${esc(AMBIENT[S.tick % AMBIENT.length])} // 耗時：<span class="timer">${timeStr}</span></div>
+          </div>
+    `;
+
+    if(isFinished){
+      html += `
+        <div class="card center" style="border-color:var(--green); background:rgba(91,224,138,0.03);">
+          <h2 style="color:var(--green);">逃生協定執行成功</h2>
+          <div class="sub" style="font-size:15px; margin-top:10px;">全體船員已成功逃離太空站。最終總用時為：<strong>${timeStr}</strong>。</div>
+          <button class="btn-amber btn-reset-lobby" style="margin-top:15px;" onclick="actLeaveRoom()">返回大廳</button>
+        </div>
+      `;
+    } else {
+      html += `
+        <div class="card" style="border-top: 3px solid ${ROLE_COLOR[role] || 'var(--line)'};">
+          <div>目前身分：<span class="role-badge role-${role}">${ROLE_TITLE[role] || '觀察員'}</span></div>
+          <div style="margin-top:10px; font-size:12px; color:var(--dim);">${HINTS[meta.stage] || ''}</div>
+        </div>
+      `;
+
+      if(meta.stage === 1){
+        const job = meta.stage1.jobs[role];
+        const colors = meta.stage1.colors;
+        const colorOrder = colors.join(' → ');
+        let jobDesc = '';
+        if(job.type === 1){
+          jobDesc = `你被分配到任務1：你知道 <strong>${job.color}色</strong> 的數字為 <strong>${job.digit}</strong>。`;
+        } else if(job.type === 2){
+          jobDesc = `你被分配到任務2：你知道這三種顏色的排列順序：<strong>${job.colors.join(' → ')}</strong>。`;
+        } else if(job.type === 3){
+          jobDesc = `你被分配到任務3：你知道 <strong>${job.color}色</strong> 的數字為 <strong>${job.digit}</strong>，且最後一個顏色的數字 <strong>${job.relation}</strong> 你的數字。`;
+        } else {
+          jobDesc = '你被分配到任務4：你負責輸入最終答案。請等待隊友提供資訊後，輸入正確的 3 位數字。';
+        }
+        html += `
+          <div class="card">
+            <h2>第一階段 // 協定解碼工作分配</h2>
+            <div class="sub">本階段共有 4 種任務，請配合隊友完成。你的任務如下：</div>
+            <div class="clue-box" style="text-align:left; font-size:15px; line-height:1.8;">
+              ${jobDesc}
+            </div>
+            <div class="sub" style="margin-top:14px;"></div>
+        `;
+        if(job.type === 4){
+          html += `
+            <div style="margin-top:20px; max-width:280px; margin:20px auto 0;">
+              <label class="center">輸入3位數答案</label>
+              <input type="text" id="safeInput" class="code-input" maxlength="3" placeholder="000">
+              <button class="btn-amber" style="width:100%; margin-top:12px;" onclick="actSubmitStage1()">提交答案</button>
+              <div id="stage1Msg"></div>
+            </div>
+          `;
+        } else {
+          html += `
+            <div class="sub" style="margin-top:20px;">請把你得到的資訊傳達給負責輸入答案的隊友，協力推理出紅、藍、綠、黃四個數字。</div>
+          `;
+        }
+        html += `</div>`;
+      }
+      else if(meta.stage === 2){
+        const w = meta.stage2.windowStart;
+        let mainPart = '';
+        if(!w){
+          mainPart = `
+            <div class="center" style="padding:30px 0;">
+              <p class="sub">同步開關需要由一位船員啟動，啟動後 5 秒內所有人必須按下各自的開關。</p>
+              <button class="btn-amber" onclick="actStartSyncTest()">開啟 5 秒同步閘</button>
+            </div>
+          `;
+        } else {
+          const remaining = Math.max(0, 5000 - (Date.now() - w));
+          let cells = '';
+          ROLE_ORDER.forEach(r => {
+            const ok = S.switches[r] && S.switches[r].ts >= w;
+            cells += `<div class="sync-cell ${ok?'on':''}" style="border:1px solid ${ROLE_COLOR[r]}"></div>`;
+          });
+          
+          mainPart = `
+            <div class="center">
+              <div class="mono" style="font-size:24px; color:var(--red); margin-bottom:14px;">倒數計時: ${(remaining/1000).toFixed(1)}s</div>
+              <button class="switch-btn switch-${role}" onclick="actPressSwitch()">按下同步開關</button>
+              <div class="sync-track">${cells}</div>
+              <div class="sub" style="margin-top:10px;">亮起代表該員已就緒。</div>
+            </div>
+          `;
+        }
+        html += `
+          <div class="card">
+            <h2>第二階段 // 生物特徵同步核可</h2>
+            ${mainPart}
+          </div>
+        `;
+      }
+      else if(meta.stage === 3){
+        const char = meta.stage3.chars[role] || ' ';
+        html += `
+          <div class="card">
+            <h2>第三階段 // 軌道拋棄式密碼</h2>
+            <div class="sub">核心提示：整合所有人看到的文字，按照紅、藍、綠、黃角色順序拼出正確成語提交。</div>
+            <div class="clue-box">
+              <label class="center">你的專屬字元</label>
+              <div class="clue-digit" style="color:${ROLE_COLOR[role]}; font-size:52px;">${char}</div>
+            </div>
+            <div style="margin-top:20px; max-width:280px; margin:20px auto 0;">
+              <label class="center">輸入四字成語</label>
+              <input type="text" id="wordInput" class="code-input" maxlength="4" placeholder="••••" style="letter-spacing:4px;">
+              <button class="btn-amber" style="width:100%; margin-top:12px;" onclick="actSubmitStage3()">破譯核准</button>
+              <div id="stage3Msg"></div>
+            </div>
+          </div>
+        `;
+      }
+      else if(meta.stage === 4){
+        const pAB = meta.stage4.pairs.AB;
+        const pCD = meta.stage4.pairs.CD;
+        let viewHTML = '';
+        if(role === 'A'){
+          let gridCells = '';
+          for(let r=0; r<6; r++){
+            for(let c=0; c<6; c++){
+              let cl = 'cell';
+              if(pAB.grid[r][c] === '1') cl += ' wall';
+              if(pAB.exit.r === r && pAB.exit.c === c) cl += ' exit';
+              if(pAB.pos.r === r && pAB.pos.c === c) cl += ' pos';
+              gridCells += `<div class="${cl}"></div>`;
+            }
+          }
+          viewHTML = `
+            <p class="sub">【地圖觀看者】你看到第一張迷宮，請指揮走向出口。</p>
+            <div class="maze">${gridCells}</div>
+            <div class="center small" style="color:var(--amber); margin-top:8px;">黃色：隊友位置 // 綠色：右下角終點出口</div>
+          `;
+        } else if(role === 'C'){
+          let gridCells = '';
+          for(let r=0; r<6; r++){
+            for(let c=0; c<6; c++){
+              let cl = 'cell';
+              if(pCD.grid[r][c] === '1') cl += ' wall';
+              if(pCD.exit.r === r && pCD.exit.c === c) cl += ' exit';
+              if(pCD.pos.r === r && pCD.pos.c === c) cl += ' pos';
+              gridCells += `<div class="${cl}"></div>`;
+            }
+          }
+          viewHTML = `
+            <p class="sub">【地圖觀看者】你看到第二張迷宮，請指揮走向出口。</p>
+            <div class="maze">${gridCells}</div>
+            <div class="center small" style="color:var(--amber); margin-top:8px;">黃色：隊友位置 // 綠色：右下角終點出口</div>
+          `;
+        } else if(role === 'B'){
+          viewHTML = `
+            <p class="sub">【核心盲控者】你負責操控第一張迷宮移動。請聽從指揮，走到出口。</p>
+            <div style="background:#050709; height:120px; border-radius:6px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line);">
+              <div class="mono" style="font-size:12px; color:var(--dim);">[ 盲區環境：雷達失效 ]</div>
+            </div>
+            <div class="dpad">
+              <button class="btn-amber u" onclick="actMove('up')">上</button>
+              <button class="btn-amber l" onclick="actMove('left')">左</button>
+              <button class="btn-amber r" onclick="actMove('right')">右</button>
+              <button class="btn-amber d" onclick="actMove('down')">下</button>
+            </div>
+            <div class="sub" style="margin-top:10px;">第一張迷宮進度：${pAB.solved?'<strong style="color:var(--green);">已完成</strong>':'未完成'}</div>
+          `;
+        } else if(role === 'D'){
+          viewHTML = `
+            <p class="sub">【核心盲控者】你負責操控第二張迷宮移動。請聽從指揮，走到出口。</p>
+            <div style="background:#050709; height:120px; border-radius:6px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line);">
+              <div class="mono" style="font-size:12px; color:var(--dim);">[ 盲區環境：雷達失效 ]</div>
+            </div>
+            <div class="dpad">
+              <button class="btn-amber u" onclick="actMove('up')">上</button>
+              <button class="btn-amber l" onclick="actMove('left')">左</button>
+              <button class="btn-amber r" onclick="actMove('right')">右</button>
+              <button class="btn-amber d" onclick="actMove('down')">下</button>
+            </div>
+            <div class="sub" style="margin-top:10px;">第二張迷宮進度：${pCD.solved?'<strong style="color:var(--green);">已完成</strong>':'未完成'}</div>
+          `;
+        }
+        html += `
+          <div class="card">
+            <h2>第四階段 // 雙迷宮協力導航</h2>
+            ${viewHTML}
+          </div>
+        `;
+      }
+    }
+
+    let chatHTML = '';
+    if(meta.chat){
+      meta.chat.forEach(m => {
+        const c = ROLE_COLOR[m.role] || 'var(--dim)';
+        chatHTML += `
+          <div class="chat-msg">
+            <span class="who" style="color:${c}">[${m.role||'?'}] ${esc(m.name)}:</span>
+            <span class="text">${esc(m.text)}</span>
+          </div>
+        `;
+      });
+    }
+
+    html += `
+        </div>
+        <div>
+          <div class="card chat-panel">
+            <h2>內部通訊頻道</h2>
+            <div class="chat-log" id="chatLog">${chatHTML}</div>
+            <div class="chat-form" onsubmit="return false;">
+              <input type="text" id="chatInput" placeholder="輸入訊息發送給全體船員..." onkeydown="if(event.key==='Enter')actSendChat()">
+              <button class="btn-amber" onclick="actSendChat()">發送</button>
+            </div>
+          </div>
+          <div class="card">
+            <div style="font-size:12px; color:var(--dim);">
+              房號代碼: <span class="mono" style="color:var(--text); font-weight:bold;">${esc(S.code)}</span><br>
+              目前玩家數: ${meta.players?meta.players.length:0} / 4<br>
+              <span class="btn-reset-lobby" style="display:inline-block; margin-top:8px; cursor:pointer; color:var(--danger);">強制退出並釋放協定</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    app.innerHTML = html;
+    
+    const log = document.getElementById('chatLog');
+    if(log) log.scrollTop = log.scrollHeight;
+  }
+
+  // 綁定 IME 事件（確保在所有分支 DOM 建置後皆有綁定）
+  setupIMEListeners();
+  // 綁定 UI 事件處理器
+  attachUiHandlers();
+  // 【核心修復機制】畫面重新渲染完成後，立刻把剛剛記下來的字放回去，並物歸原主還原輸入游標！
+  Object.keys(savedInputs).forEach(id => {
+    const el = document.getElementById(id);
+    if(el && savedInputs[id] !== undefined) {
+      el.value = savedInputs[id];
+    }
+  });
+
+  if (activeId) {
+    const elToFocus = document.getElementById(activeId);
+    if (elToFocus) {
+      elToFocus.focus();
+      if (['nameInput', 'codeInput', 'chatInput', 'safeInput', 'wordInput'].includes(activeId)) {
+        elToFocus.setSelectionRange(selectionStart, selectionEnd);
+      }
+    }
+  }
+}
+
+async function loadLeaderboardDelayed(){
+  const box = document.getElementById('lbBox');
+  if(!box) return;
+  const list = await lbGet();
+  if(list.length === 0){
+    box.innerHTML = `<div class="small" style="color:var(--dim); text-align:center; padding:12px;">尚無紀錄</div>`;
+    return;
+  }
+  let h = '';
+  list.forEach((entry, i)=>{
+    h += `
+      <div class="leaderboard-row">
+        <div><span class="rank">#${i+1}</span> <span>${esc(entry.players ? entry.players.join(', ') : '未知船員')}</span></div>
+        <div class="mono" style="color:var(--amber);">${fmtTime(entry.time)}</div>
+      </div>
+    `;
+  });
+  box.innerHTML = h;
+}
+
+setTimeout(()=>{
+  const b = document.getElementById('boot');
+  if(b) b.style.display = 'none';
+}, 1000);
+
+checkStorage().then(()=>{
+  render();
+});
+
+setInterval(()=>{
+  if(S.screen==='play' && S.meta && S.meta.status==='playing' && !isTypingInput()){
+    // 若使用者正在輸入，暫停自動重繪，避免手機鍵盤被打斷
+    if(!S.isComposing) render();
+  }
+}, 1000);
 </script>
 </body>
 </html>
