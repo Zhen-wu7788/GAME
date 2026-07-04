@@ -96,7 +96,7 @@
 
   .maze{display:grid;grid-template-columns:repeat(6,1fr);gap:3px;max-width:320px;margin:12px auto;}
   .cell{aspect-ratio:1;border-radius:3px;background:#0c1017;border:1px solid var(--line);}
-  .cell.wall{background:#050709;border-color:#050709;}
+  .cell.wall{background:#11141a;border-color:#5f6c82;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.06);}
   .cell.exit{background:rgba(91,224,138,.25);border-color:var(--green);}
   .cell.pos{background:var(--amber);}
   .dpad{display:grid;grid-template-columns:repeat(3,60px);grid-template-rows:repeat(3,60px);gap:6px;margin:16px auto;justify-content:center;}
@@ -342,6 +342,12 @@ function setupIMEListeners(){
     el.addEventListener('compositionstart', ()=>{ S.isComposing = true; });
     el.addEventListener('compositionend', ()=>{ S.isComposing = false; setTimeout(()=>{ try{ render(); }catch(e){} }, 0); });
   });
+}
+
+function isTypingInput(){
+  const active = document.activeElement;
+  if(!active) return false;
+  return ['INPUT','TEXTAREA'].includes(active.tagName) && ['nameInput','codeInput','chatInput','safeInput','wordInput'].includes(active.id);
 }
 
 function attachUiHandlers(){
@@ -930,7 +936,7 @@ function render(){
             }
           }
           viewHTML = `
-            <p class="sub">【地圖觀看者】你看到第一張迷宮，請指揮<strong>紅組</strong>走向出口。</p>
+            <p class="sub">【地圖觀看者】你看到第一張迷宮，請指揮走向出口。</p>
             <div class="maze">${gridCells}</div>
             <div class="center small" style="color:var(--amber); margin-top:8px;">黃色：隊友位置 // 綠色：右下角終點出口</div>
           `;
@@ -946,13 +952,13 @@ function render(){
             }
           }
           viewHTML = `
-            <p class="sub">【地圖觀看者】你看到第二張迷宮，請指揮<strong>綠組 </strong>走向出口。</p>
+            <p class="sub">【地圖觀看者】你看到第二張迷宮，請指揮走向出口。</p>
             <div class="maze">${gridCells}</div>
             <div class="center small" style="color:var(--amber); margin-top:8px;">黃色：隊友位置 // 綠色：右下角終點出口</div>
           `;
         } else if(role === 'B'){
           viewHTML = `
-            <p class="sub">【核心盲控者】你負責操控第一張迷宮的紅組移動。請聽從藍組指揮，走到出口。</p>
+            <p class="sub">【核心盲控者】你負責操控第一張迷宮移動。請聽從指揮，走到出口。</p>
             <div style="background:#050709; height:120px; border-radius:6px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line);">
               <div class="mono" style="font-size:12px; color:var(--dim);">[ 盲區環境：雷達失效 ]</div>
             </div>
@@ -966,7 +972,7 @@ function render(){
           `;
         } else if(role === 'D'){
           viewHTML = `
-            <p class="sub">【核心盲控者】你負責操控第二張迷宮的綠組移動。請聽從黃組指揮，走到出口。</p>
+            <p class="sub">【核心盲控者】你負責操控第二張迷宮移動。請聽從指揮，走到出口。</p>
             <div style="background:#050709; height:120px; border-radius:6px; display:flex; align-items:center; justify-content:center; border:1px solid var(--line);">
               <div class="mono" style="font-size:12px; color:var(--dim);">[ 盲區環境：雷達失效 ]</div>
             </div>
@@ -1081,7 +1087,8 @@ checkStorage().then(()=>{
 });
 
 setInterval(()=>{
-  if(S.screen==='play' && S.meta && S.meta.status==='playing'){
+  if(S.screen==='play' && S.meta && S.meta.status==='playing' && !isTypingInput()){
+    // 若使用者正在輸入，暫停自動重繪，避免手機鍵盤被打斷
     if(!S.isComposing) render();
   }
 }, 1000);
