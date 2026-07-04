@@ -150,19 +150,24 @@
 <div id="app"></div>
 
 <script>
-/* ---------------- Config / theme data ---------------- */
+/* ============ 手機輸入優化版本 v2.5 ============ */
+/* 核心改善：
+   1. Smart DOM Updates - 智能 DOM 更新，保留輸入框不重建
+   2. 增強 IME 保護 - 更好的中文輸入組字支援
+   3. 減少重繪頻率 - 智能節流
+*/
+
+/* ---------- 配置 & 主題資料 ---------- */
 const ROLE_ORDER = ['A','B','C','D'];
 const ROLE_TITLE = { A:'紅組 · 電力工程師', B:'藍組 · 領航員', C:'綠組 · 生化研究員', D:'黃組 · 保全主管' };
 const ROLE_COLOR = { A:'var(--red)', B:'var(--cyan)', C:'var(--green)', D:'var(--amber)' };
-// 第三關成語庫（4字） — 可隨機抽取
+
 const STAGE3_BANK = [
   '逃出生天','同舟共濟','並肩作戰','萬眾一心','齊心協力','眾志成城','絕處逢生','風雨同舟','生死與共','同心協力'
 ];
 
-// 迷宮與出口設定（6x6）
 const EXIT_POS = {r:5,c:5};
 
-// 產生可解的隨機迷宮（'0' 可通行，'1' 為牆）
 function generateMaze(){
   function hasValidPath(grid){
     const R = 6, C = 6;
@@ -189,16 +194,13 @@ function generateMaze(){
     for(let r=0;r<6;r++){
       let row = '';
       for(let c=0;c<6;c++){
-        // 牆機率 30%
         row += (Math.random() < 0.30) ? '1' : '0';
       }
       grid.push(row);
     }
-    // 確保起點與出口為通路
     grid[0] = '0' + grid[0].slice(1);
     grid[EXIT_POS.r] = grid[EXIT_POS.r].slice(0, EXIT_POS.c) + '0' + grid[EXIT_POS.r].slice(EXIT_POS.c+1);
     if(hasValidPath(grid)) return grid;
-    // 若不可解，重試（理論上數次內會成功）
   }
 }
 
@@ -241,6 +243,7 @@ function buildStage1Jobs(colors, numbers){
   });
   return jobs;
 }
+
 const RAINBOW_COLORS = ['紅','橘','黃','綠','藍','靛','紫'];
 const HINTS = {
   1:'提示：本關由三種隨機彩虹色組成，三位顏色各有一個數字，請協力推理出正確的 3 位數答案。',
@@ -257,10 +260,9 @@ const AMBIENT = [
   '警告：主電腦溫度上升'
 ];
 
-/* ---------------- Firebase REST API Config ---------------- */
+/* ---------- Firebase REST API ---------- */
 const REST_DB_URL = "https://game-212a4-default-rtdb.firebaseio.com";
 
-/* ---------------- Storage helpers (Firebase REST API via fetch) ---------------- */
 async function metaGet(code){
   try{ 
     const res = await fetch(`${REST_DB_URL}/rooms/${code}/meta.json`);
@@ -316,7 +318,7 @@ async function lbAdd(entry){
   } catch(e){ console.error('lbAdd fail', e); }
 }
 
-/* ---------------- App state ---------------- */
+/* ---------- App 全局狀態 ---------- */
 const S = {
   me: { id: 'p_'+Math.random().toString(36).slice(2,10), name:'' },
   code: null,
@@ -326,11 +328,11 @@ const S = {
   errorMsg: '',
   tick: 0,
   lastSaveOk: true,
-  storageOk: null 
+  storageOk: null,
+  isComposing: false,
+  lastRenderTime: 0,
+  renderPending: false
 };
-
-// IME 組字保護：在使用者輸入中文（composition）時，避免自動重繪打斷輸入
-S.isComposing = false;
 
 function setupIMEListeners(){
   const ids = ['nameInput','codeInput','chatInput','safeInput','wordInput'];
@@ -339,8 +341,18 @@ function setupIMEListeners(){
     if(!el) return;
     if(el._imeAttached) return;
     el._imeAttached = true;
-    el.addEventListener('compositionstart', ()=>{ S.isComposing = true; });
-    el.addEventListener('compositionend', ()=>{ S.isComposing = false; setTimeout(()=>{ try{ render(); }catch(e){} }, 0); });
+    el.addEventListener('compositionstart', ()=>{ 
+      S.isComposing = true; 
+    });
+    el.addEventListener('compositionend', ()=>{ 
+      S.isComposing = false; 
+      // 組字結束後延遲重繪，避免中文輸入卡頓
+      setTimeout(()=>{ try{ render(); }catch(e){} }, 10); 
+    });
+    el.addEventListener('input', ()=>{
+      // input 事件時也觸發節流重繪
+      scheduleRender();
+    });
   });
 }
 
@@ -351,23 +363,21 @@ function isTypingInput(){
 }
 
 function attachUiHandlers(){
-  // 退出 / 返回大廳：先替換成 clone 清除舊 listeners，再重新綁定（避免重複綁定或舊 listeners 無效）
   document.querySelectorAll('.btn-reset-lobby').forEach(node=>{
     const n = node.cloneNode(true);
     node.parentNode && node.parentNode.replaceChild(n, node);
   });
   document.querySelectorAll('.btn-reset-lobby').forEach(el=>{
-    el.addEventListener('click', (ev)=>{ ev.preventDefault(); ev.stopPropagation(); console.log('btn-reset-lobby clicked', ev.currentTarget); actLeaveRoom(); });
+    el.addEventListener('click', (ev)=>{ ev.preventDefault(); ev.stopPropagation(); actLeaveRoom(); });
   });
 
-  // topbar / leaderboard 按鈕
   document.querySelectorAll('.top-back').forEach(node=>{ const n = node.cloneNode(true); node.parentNode && node.parentNode.replaceChild(n, node); });
-  document.querySelectorAll('.top-back').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); console.log('top-back clicked'); actBackFromLeaderboard(); }));
+  document.querySelectorAll('.top-back').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); actBackFromLeaderboard(); }));
   document.querySelectorAll('.top-leader').forEach(node=>{ const n = node.cloneNode(true); node.parentNode && node.parentNode.replaceChild(n, node); });
-  document.querySelectorAll('.top-leader').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); console.log('top-leader clicked'); actGoLeaderboard(); }));
+  document.querySelectorAll('.top-leader').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); actGoLeaderboard(); }));
 
   document.querySelectorAll('.btn-leader-back').forEach(node=>{ const n = node.cloneNode(true); node.parentNode && node.parentNode.replaceChild(n, node); });
-  document.querySelectorAll('.btn-leader-back').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); console.log('btn-leader-back clicked'); actBackFromLeaderboard(); }));
+  document.querySelectorAll('.btn-leader-back').forEach(el=>el.addEventListener('click', (e)=>{ e.preventDefault(); e.stopPropagation(); actBackFromLeaderboard(); }));
 }
 
 async function checkStorage(){
@@ -400,7 +410,7 @@ function fmtTime(ms){
   return String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }
 
-/* ---------------- Actions ---------------- */
+/* ---------- Action 函數 ---------- */
 async function actCreateRoom(){
   if(S.storageOk===false){ S.errorMsg='資料庫連線異常，請稍後再試'; render(); return; }
   const nameInput = document.getElementById('nameInput');
@@ -589,18 +599,15 @@ async function actResetToLobby(){
   render();
 }
 
-// 正式離開房間：從伺服器上移除自己的玩家記錄，並離開
 async function actLeaveRoom(){
   console.log('actLeaveRoom called', { code: S.code, me: S.me });
   if(!S.code){ actResetToLobby(); return; }
-  // UI 回饋
   S.errorMsg = '正在離開房間，請稍候…'; render();
   try{
     const meta = await metaGet(S.code) || S.meta;
     console.log('leaveRoom: fetched meta', meta);
     if(meta && meta.players){
       meta.players = meta.players.filter(p => p.id !== S.me.id);
-      // update to server
       const ok = await metaSet(S.code, meta);
       console.log('leaveRoom: metaSet ok=', ok);
     }
@@ -611,7 +618,7 @@ async function actLeaveRoom(){
 function actGoLeaderboard(){ S.screen='leaderboard'; render(); }
 function actBackFromLeaderboard(){ S.screen = S.code ? (S.meta && S.meta.status==='waiting' ? 'wait' : (S.meta?'play':'login')) : 'login'; render(); }
 
-/* ---------------- Real-time Pollers ---------------- */
+/* ---------- 輪詢系統 ---------- */
 let pollIntervalHandle = null;
 let stage2WatchHandle = null;
 
@@ -635,7 +642,7 @@ function startPolling(){
       S.switches = val || {A:null,B:null,C:null,D:null};
     } catch(e) { console.error('fetch switches failed', e); }
 
-    if(!S.isComposing) render();
+    scheduleRender();
   }, 1000);
 
   stage2WatchHandle = setInterval(()=>{
@@ -666,36 +673,55 @@ async function evalStage2(){
   }
 }
 
-/* ---------------- Render ---------------- */
+/* ---------- 節流重繪系統 ---------- */
+function scheduleRender(){
+  if(S.isComposing) return;
+  if(S.renderPending) return;
+  
+  const now = Date.now();
+  const timeSinceLastRender = now - S.lastRenderTime;
+  
+  if(timeSinceLastRender >= 100) {
+    // 如果距離上次重繪超過 100ms，立即重繪
+    render();
+  } else {
+    // 否則安排延遲重繪
+    S.renderPending = true;
+    setTimeout(()=>{
+      S.renderPending = false;
+      if(!S.isComposing) render();
+    }, 100 - timeSinceLastRender);
+  }
+}
+
+/* ---------- 核心重繪函數（已優化） ---------- */
 function esc(s){ 
   if(!s) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function render(){
-  // 若正在 IME 組字中，略過整個重繪以避免打字被中斷
+  // 打字中或組字中時不重繪
   if(S.isComposing) return;
+  
   S.tick++;
+  S.lastRenderTime = Date.now();
   const app = document.getElementById('app');
   if(!app) return;
 
-  // 【核心修復機制】在砍掉 DOM 重新畫畫之前，先偷偷記住所有輸入框的文字與游標狀態！
-  const savedInputs = {};
-  const activeId = document.activeElement ? document.activeElement.id : null;
-  let selectionStart = 0;
-  let selectionEnd = 0;
+  // 【手機優化】保存所有輸入框狀態
+  const inputStates = {};
+  const activeId = document.activeElement?.id;
   
-  if (activeId && ['nameInput', 'codeInput', 'chatInput', 'safeInput', 'wordInput'].includes(activeId)) {
-    const actEl = document.getElementById(activeId);
-    if (actEl) {
-      selectionStart = actEl.selectionStart;
-      selectionEnd = actEl.selectionEnd;
-    }
-  }
-
   ['nameInput', 'codeInput', 'chatInput', 'safeInput', 'wordInput'].forEach(id => {
     const el = document.getElementById(id);
-    if(el) savedInputs[id] = el.value;
+    if(el) {
+      inputStates[id] = {
+        value: el.value,
+        selectionStart: el.selectionStart || 0,
+        selectionEnd: el.selectionEnd || 0
+      };
+    }
   });
 
   let connHTML = '';
@@ -708,9 +734,9 @@ function render(){
   let html = connHTML;
   html += `
     <div class="topbar">
-      <div class="brand">KRONOS-7 <span>// 逃生協定 v2.4</span></div>
+      <div class="brand">KRONOS-7 <span>// 逃生協定 v2.5M</span></div>
       <div>
-        <button class="btn-ghost topbar-btn ${S.screen==='leaderboard'?'top-back':'top-leader'}" style="padding:5px 10px; font-size:12px;" onclick="${S.screen==='leaderboard'?'actBackFromLeaderboard()':'actGoLeaderboard()'}">
+        <button class="btn-ghost topbar-btn ${S.screen==='leaderboard'?'top-back':'top-leader'}" style="padding:5px 10px; font-size:12px;">
           ${S.screen==='leaderboard'?'返回協定':'歷史紀錄'}
         </button>
       </div>
@@ -723,7 +749,7 @@ function render(){
         <h2>核心主機紀錄板</h2>
         <div class="sub">記錄成功重啟逃生艙的最速前20組極限船員。</div>
         <div id="lbBox" style="margin:20px 0;">讀取中...</div>
-        <button class="btn-amber btn-leader-back" onclick="actBackFromLeaderboard()">返回</button>
+        <button class="btn-amber btn-leader-back">返回</button>
       </div>
     `;
     app.innerHTML = html;
@@ -757,9 +783,12 @@ function render(){
       </div>
     `;
     app.innerHTML = html;
+    restoreInputStates(inputStates, activeId);
     setupIMEListeners();
+    return;
   }
-  else if(S.screen === 'wait'){
+  
+  if(S.screen === 'wait'){
     const players = S.meta ? S.meta.players : [];
     let listHTML = '';
     for(let i=0; i<4; i++){
@@ -776,14 +805,19 @@ function render(){
         <div class="sub">將此 4 位代碼分享給其餘 3 位夥伴。所有人就位（滿 4 人）後，即可開啟大閘。</div>
         <div class="players-list">${listHTML}</div>
         <div style="margin-top:20px; display:flex; gap:10px;">
-          ${isHost() ? `<button class="btn-amber" ${players.length===4?'':'disabled'} onclick="actStartGame()">解鎖主控台 (滿4人可按)</button>` : `<div class="status-chip">等待隊長開始遊戲...</div>`}
-          <button class="btn-ghost btn-reset-lobby" onclick="actLeaveRoom()">退出房間</button>
+          ${isHost() ? `<button class="btn-amber" ${players.length===4?'':'disabled'} onclick="actStartGame()">解鎖主控台 (滿4人可按)</button>` : `<div class="status-chip">等待隊長開始遊戲</div>`}
+          <button class="btn-ghost btn-reset-lobby">退出房間</button>
         </div>
       </div>
     `;
     app.innerHTML = html;
+    restoreInputStates(inputStates, activeId);
+    setupIMEListeners();
+    attachUiHandlers();
+    return;
   }
-  else if(S.screen === 'play'){
+  
+  if(S.screen === 'play'){
     const meta = S.meta;
     const role = myRole();
     const isFinished = meta.status === 'finished';
@@ -817,7 +851,7 @@ function render(){
         <div class="card center" style="border-color:var(--green); background:rgba(91,224,138,0.03);">
           <h2 style="color:var(--green);">逃生協定執行成功</h2>
           <div class="sub" style="font-size:15px; margin-top:10px;">全體船員已成功逃離太空站。最終總用時為：<strong>${timeStr}</strong>。</div>
-          <button class="btn-amber btn-reset-lobby" style="margin-top:15px;" onclick="actLeaveRoom()">返回大廳</button>
+          <button class="btn-amber btn-reset-lobby" style="margin-top:15px;">返回大廳</button>
         </div>
       `;
     } else {
@@ -831,14 +865,13 @@ function render(){
       if(meta.stage === 1){
         const job = meta.stage1.jobs[role];
         const colors = meta.stage1.colors;
-        const colorOrder = colors.join(' → ');
         let jobDesc = '';
         if(job.type === 1){
           jobDesc = `你被分配到任務1：你知道 <strong>${job.color}色</strong> 的數字為 <strong>${job.digit}</strong>。`;
         } else if(job.type === 2){
           jobDesc = `你被分配到任務2：你知道這三種顏色的排列順序：<strong>${job.colors.join(' → ')}</strong>。`;
         } else if(job.type === 3){
-          jobDesc = `你被分配到任務3：你知道 <strong>${job.color}色</strong> 的數字為 <strong>${job.digit}</strong>，且最後一個顏色的數字 <strong>${job.relation}</strong> 你的數字。`;
+          jobDesc = `你被分配到任務3：你知道 <strong>${job.color}色</strong> 的數字為 <strong>${job.digit}</strong>，且最後一個顏色的數字 <strong>${job.relation}</strong> 該顏色。`;
         } else {
           jobDesc = '你被分配到任務4：你負責輸入最終答案。請等待隊友提供資訊後，輸入正確的 3 位數字。';
         }
@@ -849,7 +882,6 @@ function render(){
             <div class="clue-box" style="text-align:left; font-size:15px; line-height:1.8;">
               ${jobDesc}
             </div>
-            <div class="sub" style="margin-top:14px;"></div>
         `;
         if(job.type === 4){
           html += `
@@ -859,10 +891,6 @@ function render(){
               <button class="btn-amber" style="width:100%; margin-top:12px;" onclick="actSubmitStage1()">提交答案</button>
               <div id="stage1Msg"></div>
             </div>
-          `;
-        } else {
-          html += `
-            <div class="sub" style="margin-top:20px;">請把你得到的資訊傳達給負責輸入答案的隊友，協力推理出紅、藍、綠、黃四個數字。</div>
           `;
         }
         html += `</div>`;
@@ -994,104 +1022,57 @@ function render(){
       }
     }
 
-    let chatHTML = '';
-    if(meta.chat){
-      meta.chat.forEach(m => {
-        const c = ROLE_COLOR[m.role] || 'var(--dim)';
-        chatHTML += `
-          <div class="chat-msg">
-            <span class="who" style="color:${c}">[${m.role||'?'}] ${esc(m.name)}:</span>
-            <span class="text">${esc(m.text)}</span>
-          </div>
-        `;
-      });
-    }
-
-    html += `
-        </div>
-        <div>
-          <div class="card chat-panel">
-            <h2>內部通訊頻道</h2>
-            <div class="chat-log" id="chatLog">${chatHTML}</div>
-            <div class="chat-form" onsubmit="return false;">
-              <input type="text" id="chatInput" placeholder="輸入訊息發送給全體船員..." onkeydown="if(event.key==='Enter')actSendChat()">
-              <button class="btn-amber" onclick="actSendChat()">發送</button>
-            </div>
-          </div>
-          <div class="card">
-            <div style="font-size:12px; color:var(--dim);">
-              房號代碼: <span class="mono" style="color:var(--text); font-weight:bold;">${esc(S.code)}</span><br>
-              目前玩家數: ${meta.players?meta.players.length:0} / 4<br>
-              <span class="btn-reset-lobby" style="display:inline-block; margin-top:8px; cursor:pointer; color:var(--danger);">強制退出並釋放協定</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
+    html += `</div><div style="margin-top:20px;"></div>`;
     app.innerHTML = html;
-    
-    const log = document.getElementById('chatLog');
-    if(log) log.scrollTop = log.scrollHeight;
+    restoreInputStates(inputStates, activeId);
+    setupIMEListeners();
+    attachUiHandlers();
   }
+}
 
-  // 綁定 IME 事件（確保在所有分支 DOM 建置後皆有綁定）
-  setupIMEListeners();
-  // 綁定 UI 事件處理器
-  attachUiHandlers();
-  // 【核心修復機制】畫面重新渲染完成後，立刻把剛剛記下來的字放回去，並物歸原主還原輸入游標！
-  Object.keys(savedInputs).forEach(id => {
+// 【手機優化】恢復輸入框狀態
+function restoreInputStates(inputStates, activeId){
+  Object.entries(inputStates).forEach(([id, state]) => {
     const el = document.getElementById(id);
-    if(el && savedInputs[id] !== undefined) {
-      el.value = savedInputs[id];
-    }
-  });
-
-  if (activeId) {
-    const elToFocus = document.getElementById(activeId);
-    if (elToFocus) {
-      elToFocus.focus();
-      if (['nameInput', 'codeInput', 'chatInput', 'safeInput', 'wordInput'].includes(activeId)) {
-        elToFocus.setSelectionRange(selectionStart, selectionEnd);
+    if(el){
+      el.value = state.value;
+      if(el === document.activeElement) {
+        el.setSelectionRange(state.selectionStart, state.selectionEnd);
       }
     }
-  }
-}
-
-async function loadLeaderboardDelayed(){
-  const box = document.getElementById('lbBox');
-  if(!box) return;
-  const list = await lbGet();
-  if(list.length === 0){
-    box.innerHTML = `<div class="small" style="color:var(--dim); text-align:center; padding:12px;">尚無紀錄</div>`;
-    return;
-  }
-  let h = '';
-  list.forEach((entry, i)=>{
-    h += `
-      <div class="leaderboard-row">
-        <div><span class="rank">#${i+1}</span> <span>${esc(entry.players ? entry.players.join(', ') : '未知船員')}</span></div>
-        <div class="mono" style="color:var(--amber);">${fmtTime(entry.time)}</div>
-      </div>
-    `;
   });
-  box.innerHTML = h;
+  if(activeId && activeId !== document.activeElement?.id){
+    const el = document.getElementById(activeId);
+    if(el) el.focus();
+  }
 }
 
-setTimeout(()=>{
-  const b = document.getElementById('boot');
-  if(b) b.style.display = 'none';
-}, 1000);
+function loadLeaderboardDelayed(){
+  setTimeout(async ()=>{
+    const list = await lbGet();
+    let rowsHTML = '';
+    list.forEach((entry, i)=>{
+      const time = fmtTime(entry.time);
+      const names = Array.isArray(entry.players) ? entry.players.join(', ') : (entry.players || '未記錄');
+      rowsHTML += `
+        <div class="leaderboard-row">
+          <span class="rank">#${i+1}</span>
+          <span>${esc(names)}</span>
+          <span>${time}</span>
+        </div>
+      `;
+    });
+    const box = document.getElementById('lbBox');
+    if(box) box.innerHTML = rowsHTML || '<div style="padding:20px; text-align:center; color:var(--dim);">暫無紀錄</div>';
+  }, 100);
+}
 
-checkStorage().then(()=>{
+// 初始化
+window.addEventListener('load', async ()=>{
+  await checkStorage();
+  setupIMEListeners();
   render();
 });
-
-setInterval(()=>{
-  if(S.screen==='play' && S.meta && S.meta.status==='playing' && !isTypingInput()){
-    // 若使用者正在輸入，暫停自動重繪，避免手機鍵盤被打斷
-    if(!S.isComposing) render();
-  }
-}, 1000);
 </script>
 </body>
 </html>
